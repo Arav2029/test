@@ -1,0 +1,190 @@
+#!groovy
+import jenkins.model.* 
+import hudson.*
+import hudson.model.*
+import groovy.json.*
+import java.text.SimpleDateFormat
+
+def date = new Date()
+today = new SimpleDateFormat("ddMMyyyy")
+def COLOR_MAP = ['SUCCESS': '#00FF00', 'FAILURE': '#FF0000','UNSTABLE': '#FFFF00', 'ABORTED': '#800000']
+
+
+properties([
+    parameters([
+     choice(name: "AGENT", 
+      choices: ["N/A", "Nodejs-Build-Common"],
+      description: "Select your Build Environment"), 
+
+      string(
+      name: 'Trigger_Repo',
+      description: "Enter Your Github Repo"),
+
+      string(
+      name: 'Trigger_Branch',
+      description: "Enter Your Github Branch"),    
+     
+      [$class: 'ChoiceParameter', 
+        choiceType: 'PT_SINGLE_SELECT', 
+        description: 'Select the ApplicationType from the Dropdown List', 
+        filterLength: 1, 
+        filterable: false, 
+        name: 'Env', 
+        script: [
+            $class: 'GroovyScript', 
+            fallbackScript: [
+                classpath: [], 
+                sandbox: false, 
+                script: 
+                    "return['Could not get The ApplicationType']"
+            ], 
+            script: [
+                classpath: [], 
+                sandbox: false, 
+                script: 
+                    "return['TEBS-Web', 'TEBS-Api', 'html.taxexemptbonds.com']"
+            ]
+          ]
+      ],
+
+      [$class: 'CascadeChoiceParameter', 
+        choiceType: 'PT_SINGLE_SELECT', 
+        description: 'Select the Application from the Dropdown List',
+        name: 'Application', 
+        referencedParameters: 'Env', 
+        script: 
+            [$class: 'GroovyScript', 
+            fallbackScript: [
+                    classpath: [], 
+                    sandbox: false, 
+                    script: "return['Could not get Application from Env Param']"
+                    ], 
+            script: [
+                    classpath: [], 
+                    sandbox: false, 
+                    script: '''
+                        if (Env.equals('TEBS-Web')){
+                            return['tebs-app', 'tebs-spancontrol', 'tebs-client-portal', 'tebs-esign-portal']
+                        }
+                        else if(Env.equals('TEBS-Api')){
+                            return['tebs-auth-api', 'tebs-business-api', 'tebs-form8038cp-api', 'tebs-payment-api', 'tebs-logger-api', 'tebs-client-portal-api', 'tebs-span-control-api', 'tebs-esign-portal-api']
+                        }
+                        else if(Env.equals('html.taxexemptbonds.com')){
+                            return['tebs-design-app', 'tebs-design-client-portal', 'tebs-design-esign-portal', 'tebs-design-spanControl']
+                        }
+                        '''
+                ] 
+          ]
+       ], //cascade choice   
+
+      string(
+      name: 'tags',
+      //defaultValue: "Enter Your Docker Tag Number",
+      description: "Enter Docker tag number")  
+
+    ]) //parameter
+])//options
+
+
+pipeline {
+    agent {
+        label params.AGENT == "any" ? "" : params.AGENT 
+    }
+
+tools {
+        // Use the name you provided for Node.js in Global Tool Configuration
+        nodejs "nodejs-span"
+    }
+
+    environment{
+        VERSION = "${env.BUILD_ID}"
+        job = "${env.JOB_NAME}"
+        dopsemail = "devops@spantechnologyservices.com"
+        devemail = "tbsdevops@spantechnologyservices.com"
+        NEXUS_URL = "stsartifacts.spanllc.com"
+    }
+
+  stages {
+    stage('Git Clone') {
+      steps {
+        script {
+          sh "pwd"
+          echo "${env.Trigger_Repo}','${env.Trigger_Branch}'"
+          git credentialsId: 'githubDops', branch: "${env.Trigger_Branch}",  url: "${env.Trigger_Repo}"
+        }
+      }
+    }
+
+    stage('.env copy'){
+      steps{
+        script {  
+            if (params.Env != 'html.taxexemptbonds.com') {
+                sh "cp -r /home/ubuntu/.envs/taxexemptbond/uat/${Application}   ${env.WORKSPACE}/${Application}/.env"
+            }      
+        } 
+     }
+    }
+
+
+stage('Docker Build') {
+    steps {
+        script {
+             dir("${env.WORKSPACE}") {
+                if (params.Env == "html.taxexemptbonds.com") {
+                    sh "sudo docker build -t ${params.Application.toLowerCase()}:${params.tags} -f html.taxexemptbonds.com/${params.Application}/Dockerfile . --no-cache"
+                } else {
+                    sh "sudo docker build -t ${Application.toLowerCase()}:${tags} ./${Application.toLowerCase()}/ --no-cache"
+                }
+            }
+        }
+    }
+}
+
+
+    stage('Nexus Login'){
+      steps{
+          echo "Logging Into The Nexus Docker Repo"
+        script{
+           withCredentials([usernamePassword(credentialsId: 'spanartifacts1', usernameVariable: 'NEXUS_USER', passwordVariable: 'NEXUS_PASS')]) {
+      //     sh "docker login --username ${NEXUS_USER} --password ${NEXUS_PASS} ${NEXUS_URL}"
+             sh "echo ${NEXUS_PASS} | docker login --username ${NEXUS_USER} --password-stdin ${NEXUS_URL}"
+    }
+         }
+          
+        }
+    }
+
+
+
+    stage('Docker Push to Nexus'){
+      steps{
+        script{
+            sh "docker tag ${Application.toLowerCase()}:${tags} ${NEXUS_URL}/taxexemptbond/uat/${Application.toLowerCase()}:${tags}"
+            sh "docker push ${NEXUS_URL}/taxexemptbond/uat/${Application.toLowerCase()}:${tags}" 
+         }
+          
+        }
+    } 
+    
+}//stages
+
+
+post {
+    success{
+      script{
+        //notificationsNode.success("${BUILD_USER}", "${params.Application}", "${env.BUILD_NUMBER}", "${env.JOB_NAME}", "${env.Trigger_Branch}", "${env.dopsemail}", "${env.devemail}")
+
+        slackSend channel: '#tebs-build-alerts',color: COLOR_MAP[currentBuild.currentResult], message: notificationsNode.slacksuccess("${currentBuild.currentResult}", "${BUILD_USER}", "${params.Application}", "${env.BUILD_NUMBER}","${env.JOB_NAME}", "${env.Trigger_Branch}", "${env.tags}")
+
+      }   
+    }
+    failure{
+      script{
+       // notificationsNode.failure("${BUILD_USER}", "${params.Application}", "${env.BUILD_NUMBER}", "${env.JOB_NAME}", "${env.Trigger_Branch}", "${env.dopsemail}", "${env.devemail}")
+
+        slackSend channel: '#tebs-build-alerts', color: COLOR_MAP[currentBuild.currentResult], message: notificationsNode.slackfailure("${currentBuild.currentResult}", "${BUILD_USER}", "${params.Application}", "${env.BUILD_NUMBER}","${env.JOB_NAME}", "${env.Trigger_Branch}")
+      }   
+    }
+   } //post block
+
+}
