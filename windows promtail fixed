@@ -1,0 +1,133 @@
+fixed promtail but not full text
+
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: C:\\tmp\\positions.yaml  # Use double backslashes for Windows paths
+
+clients:
+  - url: http://35.154.157.46:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: system
+    pipeline_stages:
+      - output:
+          source: message
+          action_on_failure: skip
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: test
+          agent: promtail
+          __path__: C:\Program Files\nxlog\data  # Use full Windows path
+
+---------------------------------------------------------------------------------------------------------------
+
+$logDir = "C:\logs"
+
+# Create log directory if it doesn't exist
+if (!(Test-Path $logDir)) {
+    New-Item -ItemType Directory -Path $logDir
+}
+
+# Export Windows Event Logs to plaintext format
+wevtutil qe Application /f:text > $logDir\application.log
+wevtutil qe Security /f:text > $logDir\security.log
+wevtutil qe System /f:text > $logDir\system.log
+wevtutil qe Setup /f:text > $logDir\setup.log
+
+
+giving correct logs 
+
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: "C:\\tmp\\positions.yaml"  # Ensure proper escaping
+
+clients:
+  - url: http://35.154.157.46:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: system
+    pipeline_stages: []  # Empty array if not needed
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: test
+          agent: promtail
+          __path__: "C:\\Program Files\\nxlog\\data\\*.log"  # Use double backslashes
+
+
+automate logs to store in logs 
+
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-Command wevtutil qe Application /f:text > C:\logs\application.log; wevtutil qe Security /f:text > C:\logs\security.log; wevtutil qe System /f:text > C:\logs\system.log; wevtutil qe Setup /f:text > C:\logs\setup.log"
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName "ExportWindowsEventLogs" -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest -Force
+
+
+PS C:\Promtail> .\promtail-windows-amd64.exe --config.file=promtail-config.yml
+
+
+
+
+final fixed yml file 
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: C:\\tmp\\positions.yaml
+
+clients:
+  - url: http://35.154.157.46:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: windows_application_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: windows_application_logs
+          source: application
+          __path__: "C:\\logs\\application.log"
+
+  - job_name: windows_security_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: windows_security_logs
+          source: security
+          __path__: "C:\\logs\\security.log"
+
+  - job_name: windows_system_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: windows_system_logs
+          source: system
+          __path__: "C:\\logs\\system.log"
+
+  - job_name: windows_setup_logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: windows_setup_logs
+          source: setup
+          __path__: "C:\\logs\\setup.log"
+
+
+.\promtail-windows-amd64.exe --config.file=promtail-config.yml
+
+
