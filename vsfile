@@ -1,0 +1,64 @@
+/// fparm 
+
+
+pipeline {
+    agent any
+
+    parameters {
+        base64File description: 'Files to upload in base64 encoding', name: 'FILE'       //encode safe text through internet
+    }
+
+    environment {
+        // Nexus Repository Details
+        NEXUS_URL = 'http://172.18.0.1:8081' // Replace with your Nexus URL
+        REPOSITORY_NAME = 'test' // Replace with your repository name
+        NEXUS_USERNAME = 'admin' // Replace with your Nexus username
+        NEXUS_PASSWORD = 'admin' // Replace with your Nexus password
+    }
+
+    stages {
+        stage("stage1") {
+            steps {
+                script {
+                    // Decode the base64 file and save it as a raw file in workspace
+                    def decodedFile = "${WORKSPACE}/decoded_file"
+                    sh """
+                        echo '${params.FILE}' | base64 --decode > ${decodedFile}
+                    """
+                    echo "Decoded file stored at: ${decodedFile}"
+                }
+            }
+        }
+
+        stage('Upload to Nexus') {
+            steps {
+                script {
+                    // Path to the decoded file in workspace
+                    def uploadedFilePath = "${WORKSPACE}/decoded_file"
+                    
+                    // Nexus upload URL and repository path
+                    def nexusUploadUrl = "${NEXUS_URL}/repository/${REPOSITORY_NAME}/"
+
+                    // Extract the file name from the path
+                    def fileName = sh(script: "basename ${uploadedFilePath}", returnStdout: true).trim()
+                    echo "Uploading file: ${fileName}"
+
+                    // Upload the file to Nexus using curl
+                    sh """
+                        curl -v -u ${NEXUS_USERNAME}:${NEXUS_PASSWORD} --upload-file ${uploadedFilePath} \
+                        ${nexusUploadUrl}${fileName}
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'File successfully uploaded to Nexus!'
+        }
+        failure {
+            echo 'File upload to Nexus failed.'
+        }
+    }
+}
